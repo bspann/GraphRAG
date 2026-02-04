@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GraphRAG Chat</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <style>
+        .message-content { white-space: pre-wrap; }
+        .message-content pre { background: #1e293b; padding: 1rem; border-radius: 0.5rem; overflow-x: auto; }
+        .message-content code { font-family: 'Fira Code', monospace; font-size: 0.875rem; }
+        .strategy-badge { font-size: 0.75rem; padding: 0.25rem 0.5rem; border-radius: 9999px; }
+        .strategy-graph { background: #7c3aed; color: white; }
+        .strategy-vector { background: #0891b2; color: white; }
+        .strategy-hybrid { background: #059669; color: white; }
+        .entity-tag { background: #f3f4f6; color: #374151; font-size: 0.75rem; padding: 0.125rem 0.5rem; border-radius: 0.25rem; margin-right: 0.25rem; }
+        .typing-indicator { display: flex; gap: 0.25rem; padding: 1rem; }
+        .typing-dot { width: 0.5rem; height: 0.5rem; background: #9ca3af; border-radius: 50%; animation: bounce 1.4s infinite ease-in-out; }
+        .typing-dot:nth-child(1) { animation-delay: -0.32s; }
+        .typing-dot:nth-child(2) { animation-delay: -0.16s; }
+        @keyframes bounce { 0%, 80%, 100% { transform: translateY(0); } 40% { transform: translateY(-0.5rem); } }
+        .graph-viz { border: 1px solid #e5e7eb; border-radius: 0.5rem; padding: 1rem; margin-top: 0.5rem; background: #fafafa; }
+    </style>
+</head>
+<body class="bg-gray-100 min-h-screen">
+    <div class="flex flex-col h-screen max-w-4xl mx-auto">
+        <!-- Header -->
+        <header class="bg-gradient-to-r from-purple-600 to-blue-600 text-white p-4 shadow-lg">
+            <div class="flex justify-between items-center">
+                <div>
+                    <h1 class="text-2xl font-bold">GraphRAG Chat</h1>
+                    <p class="text-purple-100 text-sm">Knowledge Graph + Vector Search</p>
+                </div>
+                <div class="flex items-center gap-4">
+                    <span id="mode-indicator" class="strategy-badge strategy-hybrid">OmniRAG</span>
+                    <button id="clear-chat" class="bg-white/20 hover:bg-white/30 px-3 py-1 rounded text-sm transition">
+                        Clear Chat
+                    </button>
+                </div>
+            </div>
+        </header>
+
+        <!-- Chat Messages -->
+        <div id="chat-container" class="flex-1 overflow-y-auto p-4 space-y-4">
+            <!-- Welcome message -->
+            <div class="bg-purple-50 border border-purple-200 rounded-lg p-4">
+                <h3 class="font-semibold text-purple-800 mb-2">🔗 GraphRAG Mode</h3>
+                <p class="text-purple-700 text-sm">
+                    This chat uses <strong>OmniRAG</strong> - combining knowledge graph relationships with document search.
+                    Ask about connections between concepts, hierarchies, or specific facts.
+                </p>
+                <div class="mt-3 flex gap-2 flex-wrap">
+                    <span class="strategy-badge strategy-graph">Graph</span>
+                    <span class="text-sm text-purple-600">Relationships & connections</span>
+                    <span class="strategy-badge strategy-vector">Vector</span>
+                    <span class="text-sm text-purple-600">Specific facts & details</span>
+                    <span class="strategy-badge strategy-hybrid">Hybrid</span>
+                    <span class="text-sm text-purple-600">Both combined</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Input Area -->
+        <div class="bg-white border-t p-4">
+            <form id="chat-form" class="flex gap-2">
+                <input 
+                    type="text" 
+                    id="message-input" 
+                    placeholder="Ask about relationships, concepts, or details..."
+                    class="flex-1 border border-gray-300 rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-purple-500"
+                    autocomplete="off"
+                >
+                <button 
+                    type="submit" 
+                    id="send-btn"
+                    class="bg-purple-600 hover:bg-purple-700 text-white px-6 py-3 rounded-lg font-medium transition disabled:opacity-50"
+                >
+                    Send
+                </button>
+            </form>
+            <p class="text-xs text-gray-500 mt-2">
+                Session: <span id="session-id" class="font-mono">{{ session_id }}</span>
+            </p>
+        </div>
+    </div>
+
+    <script>
+        const chatContainer = document.getElementById('chat-container');
+        const chatForm = document.getElementById('chat-form');
+        const messageInput = document.getElementById('message-input');
+        const sendBtn = document.getElementById('send-btn');
+        const clearBtn = document.getElementById('clear-chat');
+        const modeIndicator = document.getElementById('mode-indicator');
+        const sessionId = '{{ session_id }}';
+
+        // Configure marked for safe rendering
+        marked.setOptions({
+            breaks: true,
+            gfm: true,
+            headerIds: false,
+            mangle: false
+        });
+
+        function addMessage(content, role, metadata = {}) {
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `flex ${role === 'user' ? 'justify-end' : 'justify-start'}`;
+            
+            const bubble = document.createElement('div');
+            bubble.className = role === 'user' 
+                ? 'bg-purple-600 text-white rounded-lg px-4 py-3 max-w-[80%]'
+                : 'bg-white border rounded-lg px-4 py-3 max-w-[80%] shadow-sm';
+            
+            if (role === 'assistant') {
+                // Add metadata badges
+                if (metadata.strategy) {
+                    const strategyBadge = document.createElement('span');
+                    strategyBadge.className = `strategy-badge strategy-${metadata.strategy} mb-2 inline-block`;
+                    strategyBadge.textContent = metadata.strategy.charAt(0).toUpperCase() + metadata.strategy.slice(1);
+                    bubble.appendChild(strategyBadge);
+                }
+                
+                // Add entities found
+                if (metadata.entities_found && metadata.entities_found.length > 0) {
+                    const entitiesDiv = document.createElement('div');
+                    entitiesDiv.className = 'mb-2';
+                    metadata.entities_found.forEach(entity => {
+                        const tag = document.createElement('span');
+                        tag.className = 'entity-tag';
+                        tag.textContent = entity;
+                        entitiesDiv.appendChild(tag);
+                    });
+                    bubble.appendChild(entitiesDiv);
+                }
+                
+                // Render markdown content
+                const contentDiv = document.createElement('div');
+                contentDiv.className = 'message-content prose prose-sm';
+                contentDiv.innerHTML = marked.parse(content);
+                bubble.appendChild(contentDiv);
+                
+                // Add sources if available
+                if (metadata.sources && metadata.sources.length > 0) {
+                    const sourcesDiv = document.createElement('div');
+                    sourcesDiv.className = 'mt-3 pt-2 border-t text-xs text-gray-500';
+                    sourcesDiv.innerHTML = '<strong>Sources:</strong> ';
+                    metadata.sources.forEach((source, i) => {
+                        if (i > 0) sourcesDiv.innerHTML += ', ';
+                        if (source.url) {
+                            sourcesDiv.innerHTML += `<a href="${source.url}" class="text-purple-600 hover:underline" target="_blank">${source.title}</a>`;
+                        } else {
+                            sourcesDiv.innerHTML += source.title;
+                        }
+                    });
+                    bubble.appendChild(sourcesDiv);
+                }
+            } else {
+                bubble.textContent = content;
+            }
+            
+            messageDiv.appendChild(bubble);
+            chatContainer.appendChild(messageDiv);
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+        }
+
+        function addTypingIndicator() {
+            const indicator = document.createElement('div');
+            indicator.id = 'typing-indicator';
+            indicator.className = 'flex justify-start';
+            indicator.innerHTML = `
+                <div class="bg-white border rounded-lg shadow-sm typing-indicator">
+                    <div class="typing-dot"></div>
+                    <div class="typing-dot"></div>
+                    <div class="typing-dot"></div>
+                </div>
+            `;
+            chatContainer.appendChild(indicator);
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+        }
+
+        function removeTypingIndicator() {
+            const indicator = document.getElementById('typing-indicator');
+            if (indicator) indicator.remove();
+        }
+
+        async function sendMessage(message) {
+            addMessage(message, 'user');
+            addTypingIndicator();
+            sendBtn.disabled = true;
+            messageInput.disabled = true;
+
+            try {
+                const response = await fetch('/api/chat', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ message, session_id: sessionId })
+                });
+
+                removeTypingIndicator();
+
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+
+                const data = await response.json();
+                
+                // Update mode indicator
+                if (data.metadata?.strategy) {
+                    modeIndicator.textContent = data.metadata.strategy.charAt(0).toUpperCase() + data.metadata.strategy.slice(1);
+                    modeIndicator.className = `strategy-badge strategy-${data.metadata.strategy}`;
+                }
+                
+                addMessage(data.response, 'assistant', data.metadata || {});
+                
+            } catch (error) {
+                removeTypingIndicator();
+                addMessage(`Error: ${error.message}`, 'assistant', {});
+            } finally {
+                sendBtn.disabled = false;
+                messageInput.disabled = false;
+                messageInput.focus();
+            }
+        }
+
+        chatForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const message = messageInput.value.trim();
+            if (!message) return;
+            messageInput.value = '';
+            await sendMessage(message);
+        });
+
+        clearBtn.addEventListener('click', async () => {
+            if (!confirm('Clear all chat history?')) return;
+            
+            try {
+                await fetch(`/api/history?session_id=${sessionId}`, { method: 'DELETE' });
+                // Keep welcome message, remove everything else
+                const welcome = chatContainer.querySelector('.bg-purple-50');
+                chatContainer.innerHTML = '';
+                if (welcome) chatContainer.appendChild(welcome);
+            } catch (error) {
+                console.error('Failed to clear history:', error);
+            }
+        });
+
+        // Load existing history on page load
+        async function loadHistory() {
+            try {
+                const response = await fetch(`/api/history?session_id=${sessionId}`);
+                const data = await response.json();
+                
+                if (data.messages && data.messages.length > 0) {
+                    data.messages.forEach(msg => {
+                        addMessage(msg.content, msg.role, msg.metadata || {});
+                    });
+                }
+            } catch (error) {
+                console.error('Failed to load history:', error);
+            }
+        }
+
+        loadHistory();
+        messageInput.focus();
+    </script>
+</body>
+</html>

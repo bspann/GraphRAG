@@ -1,0 +1,20 @@
+# =============================================================================
+# Terraform Variables Example
+# Copy to terraform.tfvars and fill in your values
+# =============================================================================
+
+# Basic Settings
+app_name            = "ragflask"
+environment         = "dev"
+location            = "usgovvirginia"
+resource_group_name = "rg-ragflask-dev"
+
+# Azure OpenAI (Azure Government)
+azure_openai_endpoint   = "https://your-openai-resource.openai.azure.us/"
+azure_openai_key        = "your-azure-openai-api-key"
+azure_openai_deployment = "gpt-41"
+
+# Azure AI Search (Azure Government)
+azure_search_endpoint = "https://your-search-service.search.windows.us"
+azure_search_key      = "your-search-admin-key"
+azure_search_index    = "documents"
